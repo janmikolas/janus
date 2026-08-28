@@ -1,185 +1,200 @@
 # Janus
 
-Janus je workspace pro tvorbu AI agentů, jejich propojení s externími službami
-přes MCP a porovnávání nebo slučování jejich odpovědí v jednom chatu.
+Janus is a workspace for building AI agents, connecting them to external
+services through MCP, and comparing or combining their answers in a single
+chat.
 
-Uživatel si může připojit služby, sestavit nad nimi agenty s vlastní identitou a
-instrukcemi a potom zvolit, zda chce odpověď jednoho agenta, několik nezávislých
-odpovědí vedle sebe, nebo společnou syntézu.
+Users can connect services, build agents with distinct identities and
+instructions, and then choose whether they want an answer from one agent,
+several independent answers side by side, or a combined synthesis.
 
 > [!IMPORTANT]
-> Janus je v rané fázi vývoje a není připravený pro produkční použití. Frontend
-> obsahuje hotový persistentní tok pro registraci, přihlášení, správu agentů a
-> CRUD chatů nad skutečným backendovým API. Režimy SINGLE a PARALLEL vytvářejí
-> samostatné Agent Runs, spouštějí je přes lokální Service Bus Emulator a
-> hostitelský Codex app-server a streamují jejich stav přes SSE. Statické MCP
-> servery Košík a Rohlík lze pro každý Agent Run explicitně povolit, ale
-> uživatelské Connections, auditní persistence Tool Calls a Synthesis Run zatím
-> hotové nejsou.
+> Janus is at an early stage of development and is not ready for production.
+> The frontend provides working, persistent flows for registration, sign-in,
+> agent management, and chat CRUD, all backed by the real backend API. SINGLE
+> and PARALLEL create separate Agent Runs, dispatch them through the local
+> Service Bus Emulator to a host Codex app-server, and stream their status over
+> SSE. The static Košík and Rohlík MCP servers can be explicitly enabled for
+> each Agent Run, but user-managed Connections, persistent Tool Call auditing,
+> and a Synthesis Run have not been implemented yet.
 
-## Co Janus řeší
+## What Janus is designed to solve
 
-Běžná AI aplikace zpravidla skryje výběr zdrojů i průběh práce do jedné odpovědi.
-Janus zachovává rozdíl mezi zdrojem nástrojů, agentem, jednotlivým spuštěním a
-případnou následnou syntézou. Díky tomu má být možné:
+Most AI applications hide both their choice of sources and their execution
+process behind a single answer. Janus keeps tool sources, agents, individual
+runs, and any subsequent synthesis distinct. This is intended to make it
+possible to:
 
-- připojit externí služby a řídit, kteří agenti je mohou používat;
-- vytvořit specializovaného agenta nad jedním i více MCP propojeními;
-- položit stejnou otázku více agentům a porovnat jejich odpovědi vedle sebe;
-- oslovit jen vybrané účastníky existujícího skupinového chatu;
-- sloučit dohledatelné dílčí výsledky do samostatného doporučení;
-- průběžně zobrazovat hotové výsledky, i když jiné běhy ještě pracují nebo
-  selhaly;
-- dohledat, který agent a tool vytvořil konkrétní výsledek.
+- connect external services and control which agents may use them;
+- build a specialized agent on top of one or more MCP connections;
+- ask several agents the same question and compare their answers side by side;
+- address only selected participants in an existing group chat;
+- combine traceable intermediate results into a separate recommendation;
+- show completed results immediately, even while other runs are still working
+  or have failed;
+- trace a specific result back to the agent and tool that produced it.
 
-## Jak fungují základní pojmy
+## Core concepts
 
-| Pojem | Význam |
+| Concept | Meaning |
 | --- | --- |
-| **Workspace / User** | Vlastník agentů, propojení, chatů a execution dat. |
-| **Connection** | Napojení na externí službu nebo sadu tools, například MCP Košík, Gmail nebo Calendar. |
-| **Agent** | AI identita s vlastními instrukcemi, modelem a přístupem k jedné či více Connections. |
-| **Agent Group** | Množina agentů dostupných jako účastníci společného chatu. |
-| **Chat / Message** | Konverzace a konkrétní zpráva adresovaná vybraným agentům. |
-| **Agent Run** | Samostatně sledované spuštění jednoho agenta pro konkrétní zprávu. |
-| **Tool Call** | Konkrétní volání externího nástroje v rámci jednoho Agent Run. |
+| **Workspace / User** | The owner of agents, connections, chats, and execution data. |
+| **Connection** | A link to an external service or set of tools, such as Košík MCP, Gmail, or Calendar. |
+| **Agent** | An AI identity with its own instructions, model, and access to one or more Connections. |
+| **Agent Group** | A set of agents available as participants in a shared chat. |
+| **Chat / Message** | A conversation and a specific message addressed to selected agents. |
+| **Agent Run** | An independently tracked execution of one agent for a specific message. |
+| **Tool Call** | A specific call to an external tool within an Agent Run. |
 
-### Connection není Agent
+### A Connection is not an Agent
 
-Connection pouze zpřístupňuje externí tools. Agent nad nimi přidává vlastní
-identitu, instrukce, rozhodování a výslednou odpověď. Jeden agent proto může
-používat více propojení:
+A Connection only makes external tools available. An Agent adds its own
+identity, instructions, decision-making, and final answer on top of those tools.
+A single agent can therefore use more than one connection:
 
 ```text
-Agent Potraviny
-├── MCP Košík
-└── MCP Rohlík
+Grocery Agent
+├── Košík MCP
+└── Rohlík MCP
 
-prompt -> oba zdroje -> agentova syntéza -> jedna odpověď
+prompt -> both sources -> agent combines results -> one answer
 ```
 
-To je jiný scénář než dva samostatní agenti:
+This is different from using two independent agents:
 
 ```text
                  user prompt
                     │
            ┌────────┴────────┐
            ▼                 ▼
-      Agent Košík       Agent Rohlík
+       Košík Agent       Rohlík Agent
            │                 │
-      MCP Košík         MCP Rohlík
+       Košík MCP         Rohlík MCP
            │                 │
            ▼                 ▼
-      odpověď A         odpověď B
+       answer A          answer B
 ```
 
-Druhý scénář zachovává odpovědi oddělené a umožňuje jejich přímé porovnání.
+The second scenario keeps the answers separate so they can be compared
+directly.
 
-## Režimy odpovědi
+## Response modes
 
 ### Single
 
-Zprávu dostane jeden vybraný agent. Ten podle situace použije pouze potřebné
-tools ze svých povolených Connections.
+The message goes to one selected agent. The agent uses only the tools it needs
+from its allowed Connections.
 
 ### Independent / Parallel
 
-Stejnou zprávu dostane více agentů. Každý má vlastní Agent Run, tools, průběh,
-výsledek a error state. Selhání jednoho agenta nezahodí úspěšnou odpověď jiného.
+The same message goes to multiple agents. Each has its own Agent Run, tools,
+progress, result, and error state. One agent's failure does not discard another
+agent's successful answer.
 
 ```text
 Košík                  Rohlík
 ✓ completed            ✕ failed
-odpověď A              samostatná chyba
+answer A               separate error
 ```
 
 ### Synthesis
 
-Nejprve vzniknou samostatné dílčí výsledky. Následný LLM krok je sloučí do
-společného výstupu, aniž by původní odpovědi přepsal.
+The agents first produce separate source results. A subsequent LLM step combines
+them into a shared output without overwriting the original answers.
 
 ```text
 Košík response ───┐
-                  ├── Synthesis LLM ──► společné doporučení
+                  ├── Synthesis LLM ──► combined recommendation
 Rohlík response ──┘
 ```
 
-## Zamýšlený uživatelský tok
+## Intended user flow
 
-1. Uživatel připojí externí služby v sekci **Propojení**.
-2. Vytvoří agenta, nastaví jeho identitu a instrukce a povolí mu konkrétní
-   Connections.
-3. Založí chat nebo skupinu a vybere dostupné účastníky.
-4. U konkrétní zprávy zvolí recipienty a režim Single, Parallel nebo Synthesis.
-5. Janus zobrazí průběh a výsledky jednotlivých Agent Runs postupně.
-6. Uživatel může porovnat zdrojové odpovědi, samostatné chyby i případnou syntézu.
+1. The user connects external services under **Connections**.
+2. They create an agent, define its identity and instructions, and grant it
+   access to specific Connections.
+3. They create a chat or group and choose the available participants.
+4. For each message, they select the recipients and the Single, Parallel, or
+   Synthesis mode.
+5. Janus displays the progress and results of individual Agent Runs as they
+   become available.
+6. The user can compare the source answers, individual errors, and any resulting
+   synthesis.
 
-## Stav repozitáře
+## Repository status
 
-Repozitář skládá frontend a backend jako samostatné Git submodules:
+The repository brings the frontend and backend together as separate Git
+submodules:
 
 ```text
 janus/
-├── AGENTS.md          # společná technická a pracovní pravidla
-├── Makefile           # společné příkazy delegované do submodules
-├── README.md          # produktový směr a veřejná orientace
-├── backend/           # současný infrastrukturní backendový základ
-└── frontend/          # Vue prototyp uživatelského rozhraní
+├── AGENTS.md          # shared technical and development guidelines
+├── Makefile           # shared commands delegated to the submodules
+├── README.md          # product direction and public overview
+├── backend/           # current backend and infrastructure foundation
+└── frontend/          # Vue user-interface prototype
 ```
 
 ### Frontend
 
-Frontend používá Vue 3, TypeScript, Vite, Tailwind CSS, Vue Router, Pinia,
-TanStack Vue Query a Vitest. Aktuálně obsahuje obrazovky pro:
+The frontend uses Vue 3, TypeScript, Vite, Tailwind CSS, Vue Router, Pinia,
+TanStack Vue Query, and Vitest. It currently includes screens for:
 
-- persistentní chaty a historii uživatelských zpráv;
-- výběr aktuálně spustitelných režimů Single a Parallel;
-- správu agentů a jejich povolených Connections;
-- správu MCP propojení.
+- persistent chats and user-message history;
+- selecting the currently supported Single and Parallel execution modes;
+- managing agents and their allowed Connections;
+- managing MCP connections.
 
-Správa agentů, přihlášení, registrace, ochrana rout i chatové CRUD operace a
-ukládání user messages komunikují se skutečným backendovým API. Frontend
-zobrazuje nezávislé Agent Runs, jejich průběžný text a souběžné success/failure
-stavy ze SSE. SYNTHESIZE se v UI nenabízí, dokud nevznikne samostatný
-Synthesis Run. Obrazovka Connections je stále lokální prezentační základ.
-Podrobnosti a příkazy jsou ve [`frontend/README.md`](frontend/README.md).
+Agent management, registration, sign-in, route protection, chat CRUD, and user
+message persistence all communicate with the real backend API. The frontend
+uses SSE to show independent Agent Runs, their streaming text, and concurrent
+success and failure states. SYNTHESIZE is not offered in the UI until a separate
+Synthesis Run is available. The Connections screen is still a local,
+presentation-only view. See [`frontend/README.md`](frontend/README.md) for
+details and commands.
 
 ### Backend
 
-Backend používá Kotlin, Quarkus, JDK/JVM 25 a Gradle. Je připravený jako
-jednoduchý modulární monolit a obsahuje PostgreSQL s Flyway, MongoDB, Redis, OpenAPI,
-health checks a OpenTelemetry. Obsahuje modul `identity` s lokální registrací a
-Quarkus Security autentizací a modul `agent` pro vlastněnou, PostgreSQL
-persistovanou správu agentů a jejich connector kódů. Modul `chat` přidává CRUD
-vlastních chatů a historii uživatelských zpráv s execution mode a relačním
-výběrem Agent IDs. Pro SINGLE a PARALLEL ve stejné transakci vytváří Agent Runs
-a outbox eventy, asynchronně je předává lokálním Service Busem do Codex
-app-serveru a ukládá jejich nezávislé průběhy, výsledky a chyby. Pro každý run
-vytvoří fail-closed MCP allow-list z connector kódů `KOSIK` a `ROHLIK`; všechny
-ostatní MCP servery a Codex Apps zůstávají vypnuté. První run konkrétního Agenta
-v Chatu založí trvalý Codex thread a další zprávy stejné dvojice `Chat + Agent`
-jej obnoví, takže si Agent drží kontext daného chatu. Service Bus session přitom
-zachovává pořadí těchto runů bez blokování jiných Agents. SYNTHESIZE backend
-explicitně odmítne.
-Redis drží distribuované API rate limits a obnovované leases současných SSE
-spojení; pseudonymizovaný audit těchto rozhodnutí se ukládá s omezenou retencí
-do MongoDB.
+The backend uses Kotlin, Quarkus, JDK/JVM 25, and Gradle. It is structured as a
+straightforward modular monolith and includes PostgreSQL with Flyway, MongoDB,
+Redis, OpenAPI, health checks, and OpenTelemetry. Its `identity` module provides
+local registration and authentication through Quarkus Security. The `agent`
+module manages user-owned agents and their connector codes with PostgreSQL
+persistence. The `chat` module adds CRUD for user-owned chats and a history of
+user messages, including their execution mode and relationally stored selection
+of Agent IDs.
 
-Dokumentace současného bootstrapu je v
-[`backend/README.md`](backend/README.md). Architektonická pravidla a popis tohoto
-přechodného stavu jsou v [`AGENTS.md`](AGENTS.md).
+For SINGLE and PARALLEL, the backend creates Agent Runs and outbox events in the
+same transaction. It then dispatches them asynchronously through the local
+Service Bus to the Codex app-server and stores each run's independent progress,
+result, and errors. Each run receives a fail-closed MCP allowlist derived from
+the `KOSIK` and `ROHLIK` connector codes; all other MCP servers and Codex Apps
+remain disabled. The first run of a given Agent in a Chat creates a persistent
+Codex thread. Later messages for the same `Chat + Agent` pair resume that thread,
+allowing the Agent to retain context within the chat. A Service Bus session
+preserves the order of those runs without blocking other Agents. The backend
+explicitly rejects SYNTHESIZE.
 
-## Spuštění a ověření
+Redis stores distributed API rate limits and renewable leases for active SSE
+connections. A pseudonymized audit trail of those decisions is retained in
+MongoDB for a limited period.
 
-Po naklonování inicializujte submodules:
+The current bootstrap is documented in
+[`backend/README.md`](backend/README.md). Architectural guidelines and a
+description of this transitional state are available in
+[`AGENTS.md`](AGENTS.md).
+
+## Running and validating the project
+
+Initialize the submodules after cloning the repository:
 
 ```sh
 git submodule update --init --recursive
 ```
 
-Root Makefile deleguje společné workflow do backendového a frontendového
-Makefilu. Pro tento workflow stačí Make a Docker; Java, Gradle, Node ani npm
-nemusí být nainstalované na hostu:
+The root Makefile delegates shared workflows to the backend and frontend
+Makefiles. These workflows only require Make and Docker; Java, Gradle, Node.js,
+and npm do not need to be installed on the host:
 
 ```sh
 make help
@@ -191,12 +206,14 @@ make build
 make down
 ```
 
-Jednu část lze oslovit prefixem, například `make backend-integration-test`,
-`make backend-format`, `make frontend-test-watch` nebo obecně
-`make backend-<target>` / `make frontend-<target>`.
+Prefix a target to address one part of the project—for example,
+`make backend-integration-test`, `make backend-format`,
+`make frontend-test-watch`, or more generally `make backend-<target>` and
+`make frontend-<target>`.
 
-Přímé npm, Gradle a Compose příkazy zůstávají dostupné. Pro lokální frontend
-bez Dockeru je potřeba Node.js 24 nebo kompatibilní novější verze:
+The underlying npm, Gradle, and Compose commands remain available. Running the
+frontend locally without Docker requires Node.js 24 or a compatible newer
+release:
 
 ```sh
 cd frontend
@@ -204,16 +221,16 @@ npm ci
 npm run dev
 ```
 
-Výchozí adresa je <http://localhost:5173>.
+The default address is <http://localhost:5173>.
 
-Frontend lze spustit také v Dockeru:
+You can also run the frontend in Docker:
 
 ```sh
 cd frontend
 docker compose up --build
 ```
 
-Ověření současného frontendu:
+To validate the current frontend:
 
 ```sh
 cd frontend
@@ -222,32 +239,36 @@ npm test
 npm run build
 ```
 
-## Technický směr
+## Technical direction
 
-Projekt bude růst po malých end-to-end use-casech. Hlavní principy jsou:
+The project will grow through small end-to-end use cases. Its guiding principles
+are:
 
-- jednoduché a explicitní řešení před obecnými frameworky;
-- modulární monolit před předčasnými microservices;
-- jasné hranice mezi doménou, API, persistence, LLM a MCP integracemi;
-- samostatně auditovatelné Agent Runs a Tool Calls;
-- partial results místo all-or-nothing multi-agent odpovědi;
-- server-side authorization a izolace dat mezi workspaces/users;
-- credentials pouze na bezpečné backendové boundary;
-- ověřený Tool Call jako důkaz externí akce, nikdy samotné tvrzení LLM;
-- testovatelnost od první skutečné feature.
+- simple, explicit solutions before general-purpose frameworks;
+- a modular monolith before premature microservices;
+- clear boundaries between the domain, API, persistence, LLM, and MCP
+  integrations;
+- independently auditable Agent Runs and Tool Calls;
+- partial results instead of all-or-nothing multi-agent responses;
+- server-side authorization and data isolation between workspaces and users;
+- credentials kept exclusively behind a secure backend boundary;
+- a verified Tool Call—not an LLM claim—as evidence that an external action
+  occurred;
+- testability from the first real feature onward.
 
-První malé vertikální flows tvoří registrace a přihlášení, správa agentů,
-persistence chatů a asynchronní SINGLE/PARALLEL Agent Runs se staticky
-allowlistovanými MCP servery Košík/Rohlík. Další backendové milníky mají stejným
-způsobem přidávat uživatelské Connections, auditní Tool Calls a samostatný
-Synthesis Run, nikoli obecný orchestration framework.
+The first small vertical flows cover registration and sign-in, agent management,
+chat persistence, and asynchronous SINGLE/PARALLEL Agent Runs with statically
+allowlisted Košík and Rohlík MCP servers. The next backend milestones will add
+user-managed Connections, auditable Tool Calls, and a separate Synthesis Run in
+the same incremental manner, rather than introducing a general orchestration
+framework.
 
-## Vývoj a přispívání
+## Development and contributing
 
-Před změnou si přečtěte root [`AGENTS.md`](AGENTS.md) a potom také odpovídající
-`backend/AGENTS.md` nebo `frontend/AGENTS.md`. Tyto dokumenty obsahují skutečné
-příkazy, lokální konvence, bezpečnostní invarianty a Definition of Done.
+Before making changes, read the root [`AGENTS.md`](AGENTS.md), followed by the
+relevant `backend/AGENTS.md` or `frontend/AGENTS.md`. These documents define the
+actual commands, local conventions, security invariants, and Definition of Done.
 
-Pokud změna ovlivní API, data nebo realtime stavy, zkontrolujte vždy backend i
-frontend. Do repozitáře nepatří secrets, credentials, lokální `.env` hodnoty ani
-generované build výstupy.
+If a change affects the API, data, or real-time states, always check both the
+backend and frontend. Secrets, credentials, local `.env` values, and generated
+build output do not belong in the repository.
