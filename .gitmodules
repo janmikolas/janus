@@ -1,6 +1,6 @@
 [submodule "backend"]
 	path = backend
-	url = ../backend.git
+	url = ../janus-backend.git
 [submodule "frontend"]
 	path = frontend
-	url = ../frontend.git
+	url = ../janus-frontend.git
