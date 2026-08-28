@@ -1,0 +1,152 @@
+@startuml JanusArchitecture
+title Janus — aktuální architektura aplikace
+
+left to right direction
+skinparam backgroundColor #FCFCFD
+skinparam shadowing false
+skinparam defaultFontName SansSerif
+skinparam defaultTextAlignment center
+skinparam ArrowColor #475569
+skinparam ArrowThickness 1.2
+skinparam component {
+  BackgroundColor #E0F2FE
+  BorderColor #0369A1
+  FontColor #0F172A
+}
+skinparam database {
+  BackgroundColor #FEF3C7
+  BorderColor #B45309
+  FontColor #0F172A
+}
+skinparam queue {
+  BackgroundColor #F3E8FF
+  BorderColor #7E22CE
+  FontColor #0F172A
+}
+skinparam cloud {
+  BackgroundColor #ECFDF5
+  BorderColor #047857
+  FontColor #0F172A
+}
+skinparam node {
+  BackgroundColor #F8FAFC
+  BorderColor #64748B
+  FontColor #0F172A
+}
+skinparam rectangle {
+  BackgroundColor #F8FAFC
+  BorderColor #94A3B8
+  FontColor #0F172A
+}
+
+actor "Uživatel" as user
+
+node "Prohlížeč" as browser {
+  component "Vue 3 SPA\nVue Router · Pinia\nTanStack Vue Query" as spa
+}
+
+node "Frontend container" as frontend {
+  component "Vite dev server\nTailwind CSS" as vite
+  component "Chaty a Agent Runs" as chatUi
+  component "Správa agentů" as agentUi
+  component "Connections UI\njen lokální prezentace" as connectionUi #F1F5F9
+
+  vite -[hidden]down- chatUi
+  chatUi -[hidden]right- agentUi
+  agentUi -[hidden]right- connectionUi
+}
+
+node "Backend container · Kotlin / Quarkus" as backend {
+  component "REST API\n/api/v1" as api
+  component "SSE endpoint\nagent-run snapshots" as sse
+
+  rectangle "Modulární monolit" as modules {
+    component "Identity\nregistrace a session auth" as identity
+    component "Agent\nowned agent CRUD" as agents
+    component "Chat\nchaty, zprávy, recipienti" as chats
+    component "Agent Run execution\nstate + orchestrace" as execution
+  }
+
+  component "Transactional outbox\npublisher + consumer" as runtime
+  component "In-memory event stream" as eventStream
+
+  api --> identity
+  api --> agents
+  api --> chats
+  sse --> chats : ověření vlastníka
+  runtime --> execution
+  execution --> eventStream : průběžné snapshoty
+  eventStream --> sse
+}
+
+database "PostgreSQL\nzdroj pravdy + Flyway" as postgres
+database "MongoDB\nnakonfigurováno, zatím bez\nbusiness persistence" as mongodb #F1F5F9
+
+queue "Azure Service Bus Emulator\nagent-run-requested" as serviceBus
+database "SQL Server\ninterní úložiště emulatoru" as serviceBusSql
+
+node "Hostitel vývojáře" as host {
+  component "Codex app-server\nWebSocket + capability token\nread-only sandbox" as codex
+  folder "Izolovaný Codex workspace\n(mimo zdrojový repozitář)" as codexWorkspace
+  codex --> codexWorkspace : cwd
+}
+
+cloud "OpenAI model" as model
+
+node "Observability" as observability {
+  component "OpenTelemetry Collector" as otel
+  component "Lokální debug exporter" as debugExporter
+  otel --> debugExporter
+}
+
+rectangle "Zatím neimplementováno" as future #F1F5F9 {
+  component "Backend Connections\na skutečné MCP Tool Calls" as futureMcp #F1F5F9
+  component "Synthesis Run\nrežim SYNTHESIZE" as futureSynthesis #F1F5F9
+  component "Groups" as futureGroups #F1F5F9
+}
+
+user --> spa : používá aplikaci
+vite --> spa : HTML / JS / CSS
+spa --> vite : REST a SSE přes /api\nsession cookie
+vite --> api : reverse proxy\nJSON / HTTP
+vite <-- sse : reverse proxy\ntext/event-stream
+
+identity --> postgres : user accounts
+agents --> postgres : agents + connector codes
+chats --> postgres : chats, messages, recipienti
+chats --> postgres : vytvoří Agent Runs\na outbox ve stejné transakci
+execution --> postgres : claim + průběh +\nvýsledek / chyba
+runtime --> postgres : poll / označení published
+
+runtime --> serviceBus : publikuje run ID
+serviceBus --> runtime : at-least-once delivery
+serviceBus --> serviceBusSql : interní persistence
+execution --> codex : WebSocket JSON-RPC\nprompt + agent instructions
+codex --> model : LLM inference
+backend --> otel : OTLP telemetry
+backend ..> mongodb : runtime konfigurace
+
+connectionUi ..> futureMcp : budoucí napojení
+chats ..> futureSynthesis : SYNTHESIZE nyní odmítnut
+chats ..> futureGroups : doménový záměr
+
+note bottom of serviceBus
+  Fronta přenáší pouze ID běhu.
+  PostgreSQL uchovává historii a stav.
+end note
+
+note bottom of execution
+  Aktuálně: SINGLE a PARALLEL.
+  Každý recipient má samostatný Agent Run;
+  partial success zůstává dohledatelný.
+end note
+
+legend bottom left
+  |= Styl |= Význam |
+  | <#E0F2FE> modrá | aktuálně implementovaná komponenta |
+  | <#FEF3C7> žlutá | perzistentní úložiště |
+  | <#F3E8FF> fialová | asynchronní transport |
+  | <#F1F5F9> šedá | pouze konfigurace, UI základ nebo budoucí část |
+endlegend
+
+@enduml
